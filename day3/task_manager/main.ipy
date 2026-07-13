@@ -1,0 +1,168 @@
+"""Simple Day 3 advanced-Python mini-project: a JSON task manager."""
+
+import json
+import logging
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from functools import wraps
+from pathlib import Path
+from typing import Iterator
+
+import requests
+
+
+DATA_FILE = Path("tasks.json")
+logging.basicConfig(
+    filename="task_manager.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
+
+def log_action(function):
+    """Decorator that logs every action performed by the user."""
+
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        logging.info("Running %s", function.__name__)
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
+@contextmanager
+def open_data_file(mode: str):
+    """Context manager that safely opens and closes the JSON data file."""
+    file = DATA_FILE.open(mode, encoding="utf-8")
+    try:
+        yield file
+    finally:
+        file.close()
+
+
+class Task(ABC):
+    """Abstract base class: every task must describe itself."""
+
+    def __init__(self, title: str, completed: bool = False):
+        self._title = title  # Encapsulation: internal attribute
+        self.completed = completed
+
+    @property
+    def title(self):
+        return self._title
+
+    @abstractmethod
+    def describe(self) -> str:
+        pass
+
+    def to_dict(self) -> dict:
+        return {"title": self.title, "completed": self.completed, "type": type(self).__name__}
+
+
+class PersonalTask(Task):
+    def describe(self) -> str:
+        return f"Personal: {self.title}"
+
+
+class StudyTask(Task):
+    def __init__(self, title: str, topic: str, completed: bool = False):
+        super().__init__(title, completed)
+        self.topic = topic
+
+    def describe(self) -> str:  # Polymorphism: different task descriptions
+        return f"Study ({self.topic}): {self.title}"
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["topic"] = self.topic
+        return data
+
+
+class TaskManager:
+    def __init__(self):
+        self.tasks: list[Task] = []
+        self.load()
+
+    def __iter__(self) -> Iterator[Task]:  # Makes the manager iterable
+        return iter(self.tasks)
+
+    def pending_tasks(self):  # Generator: returns one pending task at a time
+        yield from (task for task in self.tasks if not task.completed)
+
+    @log_action
+    def add_task(self, task: Task):
+        self.tasks.append(task)
+        self.save()
+
+    @log_action
+    def complete_task(self, number: int):
+        self.tasks[number - 1].completed = True
+        self.save()
+
+    def save(self):
+        with open_data_file("w") as file:
+            json.dump([task.to_dict() for task in self.tasks], file, indent=2)
+
+    def load(self):
+        if not DATA_FILE.exists():
+            return
+        with open_data_file("r") as file:
+            for item in json.load(file):
+                if item["type"] == "StudyTask":
+                    self.tasks.append(StudyTask(item["title"], item["topic"], item["completed"]))
+                else:
+                    self.tasks.append(PersonalTask(item["title"], item["completed"]))
+
+
+def show_quote():
+    """Consumes a small public REST API using requests."""
+    try:
+        response = requests.get("https://api.quotable.io/random", timeout=5)
+        response.raise_for_status()
+        quote = response.json()
+        print(f'\nMotivation: "{quote["content"]}" — {quote["author"]}')
+    except requests.RequestException:
+        print("\nMotivation: Keep learning Python, one task at a time!")
+
+
+def show_tasks(manager: TaskManager):
+    if not manager.tasks:
+        print("No tasks yet.")
+        return
+    for number, task in enumerate(manager, start=1):
+        status = "Done" if task.completed else "Pending"
+        print(f"{number}. [{status}] {task.describe()}")
+
+
+def main():
+    manager = TaskManager()
+    while True:
+        print("\n--- Python Task Manager ---")
+        print("1. Add personal task\n2. Add study task\n3. Show tasks\n4. Complete task\n5. Show pending tasks\n6. Get motivation\n7. Exit")
+        choice = input("Choose: ").strip()
+        if choice == "1":
+            manager.add_task(PersonalTask(input("Task title: ").strip()))
+        elif choice == "2":
+            manager.add_task(StudyTask(input("Task title: ").strip(), input("Python topic: ").strip()))
+        elif choice == "3":
+            show_tasks(manager)
+        elif choice == "4":
+            try:
+                manager.complete_task(int(input("Task number: ")))
+                print("Task completed.")
+            except (ValueError, IndexError):
+                print("Please enter a valid task number.")
+        elif choice == "5":
+            pending = list(manager.pending_tasks())
+            print("\n".join(task.describe() for task in pending) or "No pending tasks.")
+        elif choice == "6":
+            show_quote()
+        elif choice == "7":
+            print("Goodbye!")
+            break
+        else:
+            print("Choose a number from 1 to 7.")
+
+
+if __name__ == "__main__":
+    main()
